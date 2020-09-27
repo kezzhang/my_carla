@@ -94,12 +94,10 @@ env_params = {
     'pixor': pixor,  # whether to output PIXOR observation
 }
 
-# pdb.set_trace()
+
 gym_spec = gym.spec(env_name)
 gym_env = gym_spec.make(params=env_params)
 gym_env = FilterObservationWrapper(gym_env, ['camera', 'lidar', 'birdeye'], action_repeat, img_stack)
-
-pdb.set_trace()
 
 state_dim = gym_env.observation_space.shape[0]
 action_dim = gym_env.action_space.shape[0]

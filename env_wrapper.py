@@ -16,7 +16,6 @@ class FilterObservationWrapper():
     """Environment wrapper to filter observation channels."""
 
     def __init__(self, gym_env, input_channels, action_repeat, img_stack):
-        super(FilterObservationWrapper, self).__init__(gym_env)
         self.input_channels = input_channels
         self.action_repeat = action_repeat
         self.img_stack = img_stack
