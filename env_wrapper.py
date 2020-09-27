@@ -20,10 +20,12 @@ class FilterObservationWrapper():
         self.input_channels = input_channels
         self.action_repeat = action_repeat
         self.img_stack = img_stack
+        self.gym_env = gym_env
         observation_spaces = collections.OrderedDict()
         for channel in self.input_channels:
-            observation_spaces[channel] = self._env.observation_space[channel]
+            observation_spaces[channel] = self.gym_env.observation_space[channel]
         self.observation_space = gym.spaces.Dict(observation_spaces)
+        self.action_space = self.gym_env.action_space
 
     def modify_observation(self, observation):
         observations = collections.OrderedDict()
@@ -34,7 +36,7 @@ class FilterObservationWrapper():
     def step(self, action):
         total_reward = 0
         for i in range(self.action_repeat):
-            observation, reward, done, info = self._env.step(action)
+            observation, reward, done, info = self.gym_env.step(action)
             observation = self.modify_observation(observation)
             total_reward += reward
             if done:
@@ -45,7 +47,7 @@ class FilterObservationWrapper():
         return np.array(self.stack), total_reward, done, info
 
     def reset(self):
-        observation = self._env.reset()
+        observation = self.gym_env.reset()
         tmp = self.modify_observation(observation)
         self.stack = [tmp] * self.img_stack
         return np.array(self.stack)

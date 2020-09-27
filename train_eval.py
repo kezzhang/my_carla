@@ -11,7 +11,6 @@ from absl import flags
 from absl import logging
 
 import functools
-import gin
 import numpy as np
 import os
 import torch
@@ -113,15 +112,14 @@ state = gym_env.reset()
 training_records = []
 total_score = np.array([])
 data_for_plot = np.array([])
-state = gym_env.reset()
 for i_ep in range(5000):
     score = 0
 
     for t in range(1000):
-        action, a_logp = agent.select_action(state)
+        action = agent.select_action(state)
         state_, reward, done, _ = gym_env.step(action)
-        if agent.store_transition(state, action, a_logp, reward, state_):
-            print('updating')
+        agent.store(state, action, reward, state_, done)
+        if agent.num_transition >= args.capacity:
             agent.update()
         score += reward
         state = state_
