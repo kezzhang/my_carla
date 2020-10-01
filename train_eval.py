@@ -99,12 +99,14 @@ gym_spec = gym.spec(env_name)
 gym_env = gym_spec.make(params=env_params)
 gym_env = FilterObservationWrapper(gym_env, ['camera', 'lidar', 'birdeye'], action_repeat, img_stack)
 
-state_dim = gym_env.observation_space.shape[0]
-action_dim = gym_env.action_space.shape[0]
+# state = gym_env.reset()
+
+# state_dim = gym_env.observation_space.shape[0]
+# action_dim = gym_env.action_space.shape[0]
 max_action = float(gym_env.action_space.high[0])
 min_Val = torch.tensor(1e-7).float()
 Transition = namedtuple('Transition', ['s', 'a', 'r', 's_', 'd'])
-agent = SAC(state_dim, action_dim, max_action)
+agent = SAC(128, 2, max_action, min_Val)
 
 state = gym_env.reset()
 training_records = []

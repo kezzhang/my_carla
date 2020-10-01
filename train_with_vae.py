@@ -43,7 +43,7 @@ if __name__ == "__main__":
 
     training_records = []
     total_score = np.array([])
-    data_for_plot=np.array([])
+    data_for_plot = np.array([])
     state = env.reset()
     for i_ep in range(5000):
         score = 0
