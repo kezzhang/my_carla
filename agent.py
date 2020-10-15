@@ -108,7 +108,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from tensorboardX import SummaryWriter
 from torch.distributions import Normal
-
+from gae import VanillaVAE
 '''
 Implementation of soft actor critic
 Original paper: https://arxiv.org/abs/1801.01290
@@ -125,9 +125,9 @@ parser.add_argument('--gradient_steps', default=1, type=int)
 
 parser.add_argument('--learning_rate', default=3e-4, type=int)
 parser.add_argument('--gamma', default=0.99, type=int)  # discount gamma
-parser.add_argument('--capacity', default=10000, type=int)  # replay buffer size
+parser.add_argument('--capacity', default=10, type=int)  # replay buffer size
 parser.add_argument('--iteration', default=100000, type=int)  # num of  games
-parser.add_argument('--batch_size', default=128, type=int)  # mini batch size
+parser.add_argument('--batch_size', default=8, type=int)  # mini batch size
 parser.add_argument('--seed', default=1, type=int)
 
 # optional parameters
@@ -177,18 +177,19 @@ class NormalizedActions(gym.ActionWrapper):
 # Transition = namedtuple('Transition', ['s', 'a', 'r', 's_', 'd'])
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, max_action, min_log_std=-20, max_log_std=2):
+    def __init__(self, state_dim, action_dim, max_action, min_log_std=-20, max_log_std=2):
         super(Actor, self).__init__()
         self.fc1 = nn.Linear(state_dim, 256)
         self.fc2 = nn.Linear(256, 256)
-        self.mu_head = nn.Linear(256, 1)
-        self.log_std_head = nn.Linear(256, 1)
+        self.mu_head = nn.Linear(256, action_dim)
+        self.log_std_head = nn.Linear(256, action_dim)
         self.max_action = max_action
-
+        self.state_dim = state_dim
         self.min_log_std = min_log_std
         self.max_log_std = max_log_std
 
     def forward(self, x):
+        x = x.reshape(-1, self.state_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         mu = self.mu_head(x)
@@ -198,13 +199,15 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim):
+    def __init__(self, state_dim, action_dim):
         super(Critic, self).__init__()
         self.fc1 = nn.Linear(state_dim, 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, 1)
+        self.state_dim = state_dim
 
     def forward(self, x):
+        x = x.reshape(-1, self.state_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
@@ -235,10 +238,10 @@ class SAC():
         super(SAC, self).__init__()
         self.min_val = min_val
 
-        self.policy_net = Actor(state_dim, max_action).to(device)
-        self.value_net = Critic(state_dim).to(device)
+        self.policy_net = Actor(state_dim, action_dim, max_action).to(device)
+        self.value_net = Critic(state_dim, action_dim).to(device)
         self.Q_net = Q(state_dim, action_dim).to(device)
-        self.Target_value_net = Critic(state_dim).to(device)
+        self.Target_value_net = Critic(state_dim, action_dim).to(device)
 
         self.replay_buffer = [Transition] * args.capacity
         self.policy_optimizer = optim.Adam(self.policy_net.parameters(), lr=args.learning_rate)
@@ -256,14 +259,34 @@ class SAC():
 
         os.makedirs('./SAC_model/', exist_ok=True)
 
+        self.vae = vae = VanillaVAE(1, 256).to(device)
+        self.vae_optimizer = optim.Adam(vae.parameters(), lr=1e-3)
+
+    def update_vae(self, state):
+        self.vae_optimizer.zero_grad()
+        reconstructed_state, _, mu, log_var = self.vae(state)
+        loss = self.vae.loss_function(reconstructed_state, state, mu, log_var)['loss']
+        loss.backward()
+        self.vae_optimizer.step()
+
     def select_action(self, state):
-        state = torch.FloatTensor(state).to(device)
-        mu, log_sigma = self.policy_net(state)
+        state = torch.FloatTensor(state).to(device).unsqueeze(1)
+        sampled_latent_var = self.encode_state(state)
+        with torch.no_grad():
+            # sampled_latent_var = self.encode_state(state)
+            mu, log_sigma = self.policy_net(sampled_latent_var)
         sigma = torch.exp(log_sigma)
         dist = Normal(mu, sigma)
         z = dist.sample()
         action = torch.tanh(z).detach().cpu().numpy()
-        return action.item()  # return a scalar, float32
+        self.update_vae(state)
+        return action[0], sampled_latent_var  # return a scalar, float32
+
+    def encode_state(self, state):
+        with torch.no_grad():
+            alpha, beta = self.vae.encode(state)
+            sampled_latent_var = self.vae.reparameterize(alpha, beta)
+        return sampled_latent_var
 
     def store(self, s, a, r, s_, d):
         index = self.num_transition % args.capacity
@@ -316,7 +339,7 @@ class SAC():
             V_loss = V_loss.mean()
 
             # Single Q_net this is different from original paper!!!
-            Q_loss = self.Q_criterion(excepted_Q, next_q_value.detach())  # J_Q
+            Q_loss = self.Q_criterion(excepted_Q.float(), next_q_value.detach().float())  # J_Q
             Q_loss = Q_loss.mean()
 
             log_policy_target = excepted_new_Q - excepted_value

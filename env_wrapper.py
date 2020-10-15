@@ -1,7 +1,3 @@
-# Copyright (c) 2020: Jianyu Chen (jianyuchen@berkeley.edu).
-#
-# This work is licensed under the terms of the MIT license.
-# For a copy, see <https://opensource.org/licenses/MIT>.
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function

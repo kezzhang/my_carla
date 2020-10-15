@@ -31,14 +31,14 @@ class VanillaVAE(nn.Module):
             in_channels = h_dim
 
         self.encoder = nn.Sequential(*modules)
-        self.fc_mu = nn.Linear(576, latent_dim)
-        self.fc_var = nn.Linear(576, latent_dim)
+        self.fc_mu = nn.Linear(256, latent_dim)
+        self.fc_var = nn.Linear(256, latent_dim)
 
 
         # Build Decoder
         modules = []
 
-        self.decoder_input = nn.Linear(latent_dim, 576)
+        self.decoder_input = nn.Linear(latent_dim, 256)
 
         hidden_dims.reverse()
 
@@ -97,9 +97,10 @@ class VanillaVAE(nn.Module):
         :return: (Tensor) [B x C x H x W]
         """
         result = self.decoder_input(z)
-        result = result.view(-1, 64, 3, 3)
+        result = result.view(-1, 64, 4, 4)
         result = self.decoder(result)
         result = self.final_layer(result)
+        result = result.view(4, 1, 64, 64)
         return result
 
     def reparameterize(self, mu, logvar):

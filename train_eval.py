@@ -106,7 +106,8 @@ gym_env = FilterObservationWrapper(gym_env, ['camera', 'lidar', 'birdeye'], acti
 max_action = float(gym_env.action_space.high[0])
 min_Val = torch.tensor(1e-7).float()
 Transition = namedtuple('Transition', ['s', 'a', 'r', 's_', 'd'])
-agent = SAC(128, 2, max_action, min_Val)
+# 4*64*64
+agent = SAC(256, 2, max_action, min_Val)
 
 state = gym_env.reset()
 training_records = []
@@ -116,10 +117,11 @@ for i_ep in range(5000):
     score = 0
 
     for t in range(1000):
-        action = agent.select_action(state)
+        action, encoded_state = agent.select_action(state)
         state_, reward, done, _ = gym_env.step(action)
-        agent.store(state, action, reward, state_, done)
-        if agent.num_transition >= args.capacity:
+        encoded_state_ = agent.encode_state(state_)
+        agent.store(encoded_state, action, reward, encoded_state_, done)
+        if agent.num_transition >= 10:
             agent.update()
         score += reward
         state = state_
@@ -132,7 +134,7 @@ for i_ep in range(5000):
         tmp = np.mean(total_score[-args.log_interval:])
         print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, tmp))
         data_for_plot = np.append(data_for_plot, tmp)
-        agent.save_param()
+        agent.save()
 
 # py_env = gym_wrapper.GymWrapper(
 #     gym_env,
