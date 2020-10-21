@@ -108,7 +108,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from tensorboardX import SummaryWriter
 from torch.distributions import Normal
-from gae import VanillaVAE
+from vae import VanillaVAE
 '''
 Implementation of soft actor critic
 Original paper: https://arxiv.org/abs/1801.01290
@@ -177,19 +177,20 @@ class NormalizedActions(gym.ActionWrapper):
 # Transition = namedtuple('Transition', ['s', 'a', 'r', 's_', 'd'])
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_action, min_log_std=-20, max_log_std=2):
+    def __init__(self, state_dim, action_dim, action_ub, action_lb, min_log_std=-20, max_log_std=2):
         super(Actor, self).__init__()
-        self.fc1 = nn.Linear(state_dim, 256)
+        self.fc1 = nn.Linear(4*state_dim, 256)
         self.fc2 = nn.Linear(256, 256)
         self.mu_head = nn.Linear(256, action_dim)
         self.log_std_head = nn.Linear(256, action_dim)
-        self.max_action = max_action
+        self.action_ub = action_ub
+        self.action_lb = action_lb
         self.state_dim = state_dim
         self.min_log_std = min_log_std
         self.max_log_std = max_log_std
 
     def forward(self, x):
-        x = x.reshape(-1, self.state_dim)
+        x = x.reshape(-1, 4*self.state_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         mu = self.mu_head(x)
@@ -201,13 +202,13 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim):
         super(Critic, self).__init__()
-        self.fc1 = nn.Linear(state_dim, 256)
+        self.fc1 = nn.Linear(4*state_dim, 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, 1)
         self.state_dim = state_dim
 
     def forward(self, x):
-        x = x.reshape(-1, self.state_dim)
+        x = x.reshape(-1, 4*self.state_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
@@ -217,14 +218,14 @@ class Critic(nn.Module):
 class Q(nn.Module):
     def __init__(self, state_dim, action_dim):
         super(Q, self).__init__()
-        self.fc1 = nn.Linear(state_dim + action_dim, 256)
+        self.fc1 = nn.Linear(state_dim*4 + action_dim, 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, 1)
         self.state_dim = state_dim
         self.action_dim = action_dim
 
     def forward(self, s, a):
-        s = s.reshape(-1, self.state_dim)
+        s = s.reshape(-1, self.state_dim*4)
         a = a.reshape(-1, self.action_dim)
         x = torch.cat((s, a), -1)  # combination s and a
         x = F.relu(self.fc1(x))
@@ -234,11 +235,13 @@ class Q(nn.Module):
 
 
 class SAC():
-    def __init__(self, state_dim, action_dim, max_action, min_val):
+    def __init__(self, state_dim, action_dim, action_ub, action_lb, min_val):
         super(SAC, self).__init__()
         self.min_val = min_val
+        self.action_ub = action_ub
+        self.action_lb = action_lb
 
-        self.policy_net = Actor(state_dim, action_dim, max_action).to(device)
+        self.policy_net = Actor(state_dim, action_dim, action_ub, action_lb).to(device)
         self.value_net = Critic(state_dim, action_dim).to(device)
         self.Q_net = Q(state_dim, action_dim).to(device)
         self.Target_value_net = Critic(state_dim, action_dim).to(device)
@@ -278,7 +281,9 @@ class SAC():
         sigma = torch.exp(log_sigma)
         dist = Normal(mu, sigma)
         z = dist.sample()
-        action = torch.tanh(z).detach().cpu().numpy()
+        action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
+        action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
+        action = torch.cat((action_0, action_1), dim=1).detach().cpu().numpy()
         self.update_vae(state)
         return action[0], sampled_latent_var  # return a scalar, float32
 
@@ -300,17 +305,19 @@ class SAC():
         batch_sigma = torch.exp(batch_log_sigma)
         dist = Normal(batch_mu, batch_sigma)
         z = dist.sample()
-        action = torch.tanh(z)
+        action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
+        action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
+        action = torch.cat((action_0, action_1), dim=1)
         log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + self.min_val)
-        return action, log_prob, z, batch_mu, batch_log_sigma
+        return action, log_prob.sum(), z, batch_mu, batch_log_sigma
 
     def update(self):
         if self.num_training % 500 == 0:
             print("Training ... {} ".format(self.num_training))
-        s = torch.tensor([t.s for t in self.replay_buffer]).float().to(device)
+        s = torch.tensor([t.s.cpu().numpy() for t in self.replay_buffer]).float().to(device)
         a = torch.tensor([t.a for t in self.replay_buffer]).to(device)
         r = torch.tensor([t.r for t in self.replay_buffer]).to(device)
-        s_ = torch.tensor([t.s_ for t in self.replay_buffer]).float().to(device)
+        s_ = torch.tensor([t.s_.cpu().numpy() for t in self.replay_buffer]).float().to(device)
         d = torch.tensor([t.d for t in self.replay_buffer]).float().to(device)
 
         for _ in range(args.gradient_steps):

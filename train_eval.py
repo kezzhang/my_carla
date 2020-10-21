@@ -24,6 +24,8 @@ import pdb
 from env_wrapper import FilterObservationWrapper
 import argparse
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 action_repeat = 4
 img_stack = 4
 env_name = 'carla-v0'
@@ -103,11 +105,12 @@ gym_env = FilterObservationWrapper(gym_env, ['camera', 'lidar', 'birdeye'], acti
 
 # state_dim = gym_env.observation_space.shape[0]
 # action_dim = gym_env.action_space.shape[0]
-max_action = float(gym_env.action_space.high[0])
+action_ub = gym_env.action_space.high
+action_lb = gym_env.action_space.low
 min_Val = torch.tensor(1e-7).float()
 Transition = namedtuple('Transition', ['s', 'a', 'r', 's_', 'd'])
 # 4*64*64
-agent = SAC(256, 2, max_action, min_Val)
+agent = SAC(256, 2, action_ub, action_lb,  min_Val)
 
 state = gym_env.reset()
 training_records = []
@@ -117,9 +120,11 @@ for i_ep in range(5000):
     score = 0
 
     for t in range(1000):
+        # state = torch.FloatTensor(state).cuda()
         action, encoded_state = agent.select_action(state)
         state_, reward, done, _ = gym_env.step(action)
-        encoded_state_ = agent.encode_state(state_)
+        # state_ = torch.FloatTensor(state_).to(device).unsqueeze(1)
+        encoded_state_ = agent.encode_state(torch.FloatTensor(state_).to(device).unsqueeze(1))
         agent.store(encoded_state, action, reward, encoded_state_, done)
         if agent.num_transition >= 10:
             agent.update()
