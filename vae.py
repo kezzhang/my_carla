@@ -97,10 +97,10 @@ class VanillaVAE(nn.Module):
         :return: (Tensor) [B x C x H x W]
         """
         result = self.decoder_input(z)
-        result = result.view(-1, 64, 4, 4)
+        result = result.view(64, 64, 2, 2)
         result = self.decoder(result)
         result = self.final_layer(result)
-        result = result.view(4, 1, 64, 64)
+        #result = result.view(4, 1, 64, 64)
         return result
 
     def reparameterize(self, mu, logvar):
@@ -116,6 +116,8 @@ class VanillaVAE(nn.Module):
         return eps * std + mu
 
     def forward(self, input, **kwargs):
+        if torch.isnan(input).any():
+            print("vae")
         mu, log_var = self.encode(input)
         z = self.reparameterize(mu, log_var)
         return  [self.decode(z), input, mu, log_var]

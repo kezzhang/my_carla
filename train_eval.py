@@ -23,6 +23,7 @@ from agent import SAC
 import pdb
 from env_wrapper import FilterObservationWrapper
 import argparse
+from matplotlib import pyplot as plt
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -58,7 +59,7 @@ pixor = False
 obs_channels = None
 
 
-parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
+parser = argparse.ArgumentParser(description='Train a SAC agent for the Carla')
 parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
 parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
 parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
@@ -66,7 +67,7 @@ parser.add_argument('--seed', type=int, default=0, metavar='N', help='random see
 parser.add_argument('--render', action='store_true', help='render the environment')
 parser.add_argument('--vis', default=0, action='store_true', help='use visdom')
 parser.add_argument(
-    '--log-interval', type=int, default=10, metavar='N', help='interval between training status logs (default: 10)')
+    '--log-interval', type=int, default=100, metavar='N', help='interval between training status logs (default: 10)')
 args = parser.parse_args()
 env_params = {
     'number_of_vehicles': number_of_vehicles,
@@ -108,31 +109,71 @@ gym_env = FilterObservationWrapper(gym_env, ['camera', 'lidar', 'birdeye'], acti
 action_ub = gym_env.action_space.high
 action_lb = gym_env.action_space.low
 min_Val = torch.tensor(1e-7).float()
-Transition = namedtuple('Transition', ['s', 'a', 'r', 's_', 'd'])
+Transition = namedtuple('Transition', ['original_s', 's', 'a', 'r', 's_', 'd'])
 # 4*64*64
 agent = SAC(256, 2, action_ub, action_lb,  min_Val)
 
-state = gym_env.reset()
+
 training_records = []
 total_score = np.array([])
 data_for_plot = np.array([])
-for i_ep in range(5000):
+for i_ep in range(4000):
     score = 0
-
+    state = gym_env.reset()
     for t in range(1000):
         # state = torch.FloatTensor(state).cuda()
+        # if not state.any():
+        #     state = gym_env.reset()
+        #     break
+
+        # implement mcts
+        # queue = collections.deque()
+        # i = 0
+        # while i < 3:
+        #     action, encoded_state = agent.select_action(state)
+        #     state_, reward, done, _ = gym_env.step(action)
+        #     queue.append([action, encoded_state, state_, reward, done, None, 0])
+        #     i += 1
+        # local_optimal_1 = queue[0]
+        # local_optimal_2 = queue[0]
+        # tmp_score = float('-inf')
+        # while queue:
+        #     action, encoded_state, state_, reward, done, root, depth = queue.popleft()
+        #     if depth > 1:
+        #         continue
+        #     elif depth == 1:
+        #         if reward + root[3] > tmp_score:
+        #             local_optimal_1 = root
+        #             local_optimal_2 = [action, encoded_state, state_, reward, done]
+        #             tmp_score = reward + root[3]
+        #     else:
+        #         for i in range(3):
+        #             tmp0, tmp1 = agent.select_action(state_)
+        #             tmp2, tmp3, tmp4, _ = gym_env.step(tmp0)
+        #             queue.append([tmp0, tmp1, tmp2, tmp3, tmp4, (action, encoded_state, state_, reward, done), depth+1])
+        # score += tmp_score
+        # encoded_state_1 = agent.encode_state(torch.FloatTensor(local_optimal_1[2]).to(device).unsqueeze(1))
+        # agent.store(state, local_optimal_1[1], local_optimal_1[0], local_optimal_1[3], encoded_state_1,
+        #             local_optimal_1[4])
+        #
+        # encoded_state_2 = agent.encode_state(torch.FloatTensor(local_optimal_2[2]).to(device).unsqueeze(1))
+        # agent.store(local_optimal_1[2], local_optimal_2[1], local_optimal_2[0], local_optimal_2[3], encoded_state_2,
+        #             local_optimal_2[4])
         action, encoded_state = agent.select_action(state)
+
         state_, reward, done, _ = gym_env.step(action)
         # state_ = torch.FloatTensor(state_).to(device).unsqueeze(1)
-        encoded_state_ = agent.encode_state(torch.FloatTensor(state_).to(device).unsqueeze(1))
-        agent.store(encoded_state, action, reward, encoded_state_, done)
-        if agent.num_transition >= 10:
-            agent.update()
         score += reward
+        encoded_state_ = agent.encode_state(torch.FloatTensor(state_).to(device).unsqueeze(1))
+        agent.store(state, encoded_state, action, reward, encoded_state_, done)
+        if agent.num_transition % 16 == 0:
+            agent.update()
         state = state_
-        if done:
-            state = gym_env.reset()
+        if done or t == 999:
             break
+        # state = local_optimal_2[2]
+        # if local_optimal_1[4] or local_optimal_2[4] or t == 999:
+        #     break
     total_score = np.append(total_score, score)
 
     if i_ep % args.log_interval == 0 and i_ep != 0:
@@ -146,7 +187,9 @@ for i_ep in range(5000):
 #     discount=discount,
 #     auto_reset=True,
 #   )
-
+np.savetxt('res_16_100_10000_epsilon_greedy', data_for_plot)
+plt.plot(data_for_plot)
+plt.show()
 # eval_py_env = py_env
 
 # if action_repeat > 1:

@@ -125,9 +125,9 @@ parser.add_argument('--gradient_steps', default=1, type=int)
 
 parser.add_argument('--learning_rate', default=3e-4, type=int)
 parser.add_argument('--gamma', default=0.99, type=int)  # discount gamma
-parser.add_argument('--capacity', default=10, type=int)  # replay buffer size
+parser.add_argument('--capacity', default=16, type=int)  # replay buffer size
 parser.add_argument('--iteration', default=100000, type=int)  # num of  games
-parser.add_argument('--batch_size', default=8, type=int)  # mini batch size
+parser.add_argument('--batch_size', default=16, type=int)  # mini batch size
 parser.add_argument('--seed', default=1, type=int)
 
 # optional parameters
@@ -136,11 +136,11 @@ parser.add_argument('--num_hidden_units_per_layer', default=256, type=int)
 parser.add_argument('--sample_frequency', default=256, type=int)
 parser.add_argument('--activation', default='Relu', type=str)
 parser.add_argument('--render', default=False, type=bool)  # show UI or not
-parser.add_argument('--log_interval', default=2000, type=int)  #
+parser.add_argument('--log_interval', default=100, type=int)  #
 parser.add_argument('--load', default=False, type=bool)  # load model
 args = parser.parse_args()
 
-Transition = namedtuple('Transition', ['s', 'a', 'r', 's_', 'd'])
+Transition = namedtuple('Transition', ['original_s', 's', 'a', 'r', 's_', 'd'])
 
 
 class NormalizedActions(gym.ActionWrapper):
@@ -190,14 +190,20 @@ class Actor(nn.Module):
         self.max_log_std = max_log_std
 
     def forward(self, x):
+        if torch.isnan(x).any():
+            print("Actor_x")
         x = x.reshape(-1, 4*self.state_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         mu = self.mu_head(x)
         log_std_head = F.relu(self.log_std_head(x))
         log_std_head = torch.clamp(log_std_head, self.min_log_std, self.max_log_std)
-        return mu, log_std_head
 
+        # sigma = torch.exp(log_std_head)
+        # dist = Normal(mu, sigma)
+        # z = dist.sample()
+        # return z, log_std_head
+        return mu, log_std_head
 
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim):
@@ -205,9 +211,12 @@ class Critic(nn.Module):
         self.fc1 = nn.Linear(4*state_dim, 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, 1)
+        # self.fc3 = nn.Linear(256, action_dim)
         self.state_dim = state_dim
 
     def forward(self, x):
+        if torch.isnan(x).any():
+            print("Critic_x")
         x = x.reshape(-1, 4*self.state_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -221,10 +230,15 @@ class Q(nn.Module):
         self.fc1 = nn.Linear(state_dim*4 + action_dim, 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, 1)
+        # self.fc3 = nn.Linear(256, action_dim)
         self.state_dim = state_dim
         self.action_dim = action_dim
 
     def forward(self, s, a):
+        if torch.isnan(s).any():
+            print("Q_s")
+        elif torch.isnan(a).any():
+            print('Q_a')
         s = s.reshape(-1, self.state_dim*4)
         a = a.reshape(-1, self.action_dim)
         x = torch.cat((s, a), -1)  # combination s and a
@@ -262,7 +276,7 @@ class SAC():
 
         os.makedirs('./SAC_model/', exist_ok=True)
 
-        self.vae = vae = VanillaVAE(1, 256).to(device)
+        self.vae = vae = VanillaVAE(1, 256).to(device).float()
         self.vae_optimizer = optim.Adam(vae.parameters(), lr=1e-3)
 
     def update_vae(self, state):
@@ -273,19 +287,30 @@ class SAC():
         self.vae_optimizer.step()
 
     def select_action(self, state):
+        #self.update_vae(state)
         state = torch.FloatTensor(state).to(device).unsqueeze(1)
         sampled_latent_var = self.encode_state(state)
         with torch.no_grad():
             # sampled_latent_var = self.encode_state(state)
             mu, log_sigma = self.policy_net(sampled_latent_var)
+            # z, _ = self.policy_net(sampled_latent_var)
         sigma = torch.exp(log_sigma)
         dist = Normal(mu, sigma)
         z = dist.sample()
-        action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
-        action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
-        action = torch.cat((action_0, action_1), dim=1).detach().cpu().numpy()
-        self.update_vae(state)
-        return action[0], sampled_latent_var  # return a scalar, float32
+
+        # z = torch.tanh(z)
+        if torch.FloatTensor(1, 1).uniform_() > 0.9:
+            action_0 = torch.FloatTensor(1, 1).uniform_(self.action_lb[0], self.action_ub[0])
+            action_1 = torch.FloatTensor(1, 1).uniform_(self.action_lb[1], self.action_ub[1])
+        else:
+            action_0 = (torch.tanh(z[:, 0]) * self.action_ub[0]).unsqueeze(1)
+            action_1 = (torch.tanh(z[:, 1]) * self.action_ub[1]).unsqueeze(1)
+            # to do
+            # action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
+            # action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
+        action = torch.cat((action_0, action_1), dim=1).T.detach().cpu().numpy()
+        #self.update_vae(state)
+        return action, sampled_latent_var  # return a scalar, float32
 
     def encode_state(self, state):
         with torch.no_grad():
@@ -293,9 +318,9 @@ class SAC():
             sampled_latent_var = self.vae.reparameterize(alpha, beta)
         return sampled_latent_var
 
-    def store(self, s, a, r, s_, d):
+    def store(self, original_s, s, a, r, s_, d):
         index = self.num_transition % args.capacity
-        transition = Transition(s, a, r, s_, d)
+        transition = Transition(original_s, s, a, r, s_, d)
         self.replay_buffer[index] = transition
         self.num_transition += 1
 
@@ -305,21 +330,33 @@ class SAC():
         batch_sigma = torch.exp(batch_log_sigma)
         dist = Normal(batch_mu, batch_sigma)
         z = dist.sample()
-        action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
-        action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
-        action = torch.cat((action_0, action_1), dim=1)
-        log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + self.min_val)
+        action_0 = (torch.tanh(z[:, 0]) * self.action_ub[0]).unsqueeze(1)
+        action_1 = (torch.tanh(z[:, 1]) * self.action_ub[1]).unsqueeze(1)
+        # action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
+        # action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
+        action = torch.cat((action_0, action_1), dim=1).T
+        log_prob = dist.log_prob(z)
+        # action = torch.tanh(action)
+        # bound = torch.tensor([[3], [0.3]])
+
+        # log_prob = dist.log_prob(z) - torch.log(bound - action.pow(2) + 1e-7).T
         return action, log_prob.sum(), z, batch_mu, batch_log_sigma
 
     def update(self):
-        if self.num_training % 500 == 0:
+        if self.num_training % 16 == 0:
             print("Training ... {} ".format(self.num_training))
+        original_s = torch.tensor([t.original_s for t in self.replay_buffer]).float().to(device)
         s = torch.tensor([t.s.cpu().numpy() for t in self.replay_buffer]).float().to(device)
         a = torch.tensor([t.a for t in self.replay_buffer]).to(device)
         r = torch.tensor([t.r for t in self.replay_buffer]).to(device)
         s_ = torch.tensor([t.s_.cpu().numpy() for t in self.replay_buffer]).float().to(device)
         d = torch.tensor([t.d for t in self.replay_buffer]).float().to(device)
-
+        original_s = original_s.permute(2, 3, 0, 1)
+        original_s = original_s.view(64, 64, -1)
+        original_s = original_s.permute(2, 0, 1)
+        original_s = torch.unsqueeze(original_s, 1)
+        # original_s = torch.from_numpy(original_s)
+        self.update_vae(original_s)
         for _ in range(args.gradient_steps):
             # for index in BatchSampler(SubsetRandomSampler(range(args.capacity)), args.batch_size, False):
             index = np.random.choice(range(args.capacity), args.batch_size, replace=False)
@@ -383,6 +420,7 @@ class SAC():
         torch.save(self.policy_net.state_dict(), './SAC_model/policy_net.pth')
         torch.save(self.value_net.state_dict(), './SAC_model/value_net.pth')
         torch.save(self.Q_net.state_dict(), './SAC_model/Q_net.pth')
+        torch.save(self.vae.state_dict(), './SAC_model/vae.pth')
         print("====================================")
         print("Model has been saved...")
         print("====================================")
@@ -391,4 +429,5 @@ class SAC():
         torch.load(self.policy_net.state_dict(), './SAC_model/policy_net.pth')
         torch.load(self.value_net.state_dict(), './SAC_model/value_net.pth')
         torch.load(self.Q_net.state_dict(), './SAC_model/Q_net.pth')
+        torch.load(self.vae.state_dict(), './SAC_model/vae.pth')
         print()
