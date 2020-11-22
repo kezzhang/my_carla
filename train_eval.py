@@ -117,7 +117,29 @@ agent = SAC(256, 2, action_ub, action_lb,  min_Val)
 training_records = []
 total_score = np.array([])
 data_for_plot = np.array([])
-for i_ep in range(4000):
+
+iters = 0
+for i in range(5000):
+    if iters >= 2:
+        break
+    state = gym_env.reset()
+    for j in range(1000):
+        action_0 = torch.FloatTensor(1, 1).uniform_(action_lb[0], action_ub[0])
+        action_1 = torch.FloatTensor(1, 1).uniform_(action_lb[1], action_ub[1])
+        action = torch.cat((action_0, action_1), dim=1).T.detach().cpu().numpy()
+        state_, reward, done, _ = gym_env.step(action)
+        encoded_state = agent.encode_state(torch.FloatTensor(state).to(device).unsqueeze(1))
+        encoded_state_ = agent.encode_state(torch.FloatTensor(state_).to(device).unsqueeze(1))
+        agent.store(state, encoded_state, action, reward, encoded_state_, done)
+        if agent.num_transition % 256 == 0:
+            iters += 1
+            agent.vae_update()
+        state = state_
+        if done or j == 999:
+            break
+print('Pretrain Vae: Done!')
+
+for i_ep in range(10000):
     score = 0
     state = gym_env.reset()
     for t in range(1000):
@@ -168,6 +190,8 @@ for i_ep in range(4000):
         agent.store(state, encoded_state, action, reward, encoded_state_, done)
         if agent.num_transition % 16 == 0:
             agent.update()
+        if agent.num_transition % 256 == 0:
+            agent.vae_update()
         state = state_
         if done or t == 999:
             break

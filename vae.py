@@ -97,7 +97,7 @@ class VanillaVAE(nn.Module):
         :return: (Tensor) [B x C x H x W]
         """
         result = self.decoder_input(z)
-        result = result.view(64, 64, 2, 2)
+        result = result.view(1024, 64, 2, 2)
         result = self.decoder(result)
         result = self.final_layer(result)
         #result = result.view(4, 1, 64, 64)

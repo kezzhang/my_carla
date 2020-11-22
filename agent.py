@@ -190,8 +190,8 @@ class Actor(nn.Module):
         self.max_log_std = max_log_std
 
     def forward(self, x):
-        if torch.isnan(x).any():
-            print("Actor_x")
+        # if torch.isnan(x).any():
+        #     print("Actor_x")
         x = x.reshape(-1, 4*self.state_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -199,11 +199,12 @@ class Actor(nn.Module):
         log_std_head = F.relu(self.log_std_head(x))
         log_std_head = torch.clamp(log_std_head, self.min_log_std, self.max_log_std)
 
-        # sigma = torch.exp(log_std_head)
-        # dist = Normal(mu, sigma)
-        # z = dist.sample()
-        # return z, log_std_head
-        return mu, log_std_head
+        sigma = torch.exp(log_std_head)
+        dist = Normal(mu, sigma)
+        z = dist.sample()
+        return z, mu, log_std_head, dist.log_prob(z).sum()
+        # return mu, log_std_head
+
 
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim):
@@ -215,8 +216,8 @@ class Critic(nn.Module):
         self.state_dim = state_dim
 
     def forward(self, x):
-        if torch.isnan(x).any():
-            print("Critic_x")
+        # if torch.isnan(x).any():
+        #     print("Critic_x")
         x = x.reshape(-1, 4*self.state_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -235,16 +236,28 @@ class Q(nn.Module):
         self.action_dim = action_dim
 
     def forward(self, s, a):
-        if torch.isnan(s).any():
-            print("Q_s")
-        elif torch.isnan(a).any():
-            print('Q_a')
+        # if torch.isnan(s).any():
+        #     print("Q_s")
+        # elif torch.isnan(a).any():
+        #     print('Q_a')
         s = s.reshape(-1, self.state_dim*4)
         a = a.reshape(-1, self.action_dim)
         x = torch.cat((s, a), -1)  # combination s and a
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
+        return x
+
+
+class Predict(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Predict, self).__init__()
+        self.state_dim = state_dim
+        self.fc1 = nn.Linear(state_dim*4, state_dim*4)
+
+    def forward(self, s, a):
+        s = s.reshape(-1, self.state_dim*4)
+        x = self.fc1(s)
         return x
 
 
@@ -259,8 +272,10 @@ class SAC():
         self.value_net = Critic(state_dim, action_dim).to(device)
         self.Q_net = Q(state_dim, action_dim).to(device)
         self.Target_value_net = Critic(state_dim, action_dim).to(device)
+        # self.predict_net = Predict(state_dim, action_dim).to(device)
 
         self.replay_buffer = [Transition] * args.capacity
+        self.vae_replay_buffer = [Transition] * 256
         self.policy_optimizer = optim.Adam(self.policy_net.parameters(), lr=args.learning_rate)
         self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=args.learning_rate)
         self.Q_optimizer = optim.Adam(self.Q_net.parameters(), lr=args.learning_rate)
@@ -279,6 +294,11 @@ class SAC():
         self.vae = vae = VanillaVAE(1, 256).to(device).float()
         self.vae_optimizer = optim.Adam(vae.parameters(), lr=1e-3)
 
+    def predict_next_state(self, encoded_state):
+        state_ = self.predict_net(encoded_state)
+        reward = self.value_net(state_)
+        return state_, reward
+
     def update_vae(self, state):
         self.vae_optimizer.zero_grad()
         reconstructed_state, _, mu, log_var = self.vae(state)
@@ -292,22 +312,22 @@ class SAC():
         sampled_latent_var = self.encode_state(state)
         with torch.no_grad():
             # sampled_latent_var = self.encode_state(state)
-            mu, log_sigma = self.policy_net(sampled_latent_var)
-            # z, _ = self.policy_net(sampled_latent_var)
-        sigma = torch.exp(log_sigma)
-        dist = Normal(mu, sigma)
-        z = dist.sample()
+            # mu, log_sigma = self.policy_net(sampled_latent_var)
+            z, _, _, _ = self.policy_net(sampled_latent_var)
+        # sigma = torch.exp(log_sigma)
+        # dist = Normal(mu, sigma)
+        # z = dist.sample()
 
         # z = torch.tanh(z)
         if torch.FloatTensor(1, 1).uniform_() > 0.9:
             action_0 = torch.FloatTensor(1, 1).uniform_(self.action_lb[0], self.action_ub[0])
             action_1 = torch.FloatTensor(1, 1).uniform_(self.action_lb[1], self.action_ub[1])
         else:
-            action_0 = (torch.tanh(z[:, 0]) * self.action_ub[0]).unsqueeze(1)
-            action_1 = (torch.tanh(z[:, 1]) * self.action_ub[1]).unsqueeze(1)
+            # action_0 = (torch.tanh(z[:, 0]) * self.action_ub[0]).unsqueeze(1)
+            # action_1 = (torch.tanh(z[:, 1]) * self.action_ub[1]).unsqueeze(1)
             # to do
-            # action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
-            # action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
+            action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
+            action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
         action = torch.cat((action_0, action_1), dim=1).T.detach().cpu().numpy()
         #self.update_vae(state)
         return action, sampled_latent_var  # return a scalar, float32
@@ -322,41 +342,55 @@ class SAC():
         index = self.num_transition % args.capacity
         transition = Transition(original_s, s, a, r, s_, d)
         self.replay_buffer[index] = transition
+
+        position = self.num_transition % 256
+        self.vae_replay_buffer[position] = transition
         self.num_transition += 1
 
     def get_action_log_prob(self, state):
 
-        batch_mu, batch_log_sigma = self.policy_net(state)
-        batch_sigma = torch.exp(batch_log_sigma)
-        dist = Normal(batch_mu, batch_sigma)
-        z = dist.sample()
-        action_0 = (torch.tanh(z[:, 0]) * self.action_ub[0]).unsqueeze(1)
-        action_1 = (torch.tanh(z[:, 1]) * self.action_ub[1]).unsqueeze(1)
-        # action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
-        # action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
+        z, batch_mu, batch_log_sigma, log_prob = self.policy_net(state)
+        # batch_sigma = torch.exp(batch_log_sigma)
+        # dist = Normal(batch_mu, batch_sigma)
+        # z = dist.sample()
+        # action_0 = (torch.tanh(z[:, 0]) * self.action_ub[0]).unsqueeze(1)
+        # action_1 = (torch.tanh(z[:, 1]) * self.action_ub[1]).unsqueeze(1)
+        action_0 = torch.clamp(z[:, 0], self.action_lb[0], self.action_ub[0]).unsqueeze(1)
+        action_1 = torch.clamp(z[:, 1], self.action_lb[1], self.action_ub[1]).unsqueeze(1)
         action = torch.cat((action_0, action_1), dim=1).T
-        log_prob = dist.log_prob(z)
+        # log_prob = dist.log_prob(z)
         # action = torch.tanh(action)
         # bound = torch.tensor([[3], [0.3]])
 
         # log_prob = dist.log_prob(z) - torch.log(bound - action.pow(2) + 1e-7).T
-        return action, log_prob.sum(), z, batch_mu, batch_log_sigma
+        return action, log_prob, z, batch_mu, batch_log_sigma
 
-    def update(self):
-        if self.num_training % 16 == 0:
+    def vae_update(self):
+        if self.num_training % 256 == 0:
             print("Training ... {} ".format(self.num_training))
-        original_s = torch.tensor([t.original_s for t in self.replay_buffer]).float().to(device)
-        s = torch.tensor([t.s.cpu().numpy() for t in self.replay_buffer]).float().to(device)
-        a = torch.tensor([t.a for t in self.replay_buffer]).to(device)
-        r = torch.tensor([t.r for t in self.replay_buffer]).to(device)
-        s_ = torch.tensor([t.s_.cpu().numpy() for t in self.replay_buffer]).float().to(device)
-        d = torch.tensor([t.d for t in self.replay_buffer]).float().to(device)
+        original_s = torch.tensor([t.original_s for t in self.vae_replay_buffer]).float().to(device)
         original_s = original_s.permute(2, 3, 0, 1)
         original_s = original_s.view(64, 64, -1)
         original_s = original_s.permute(2, 0, 1)
         original_s = torch.unsqueeze(original_s, 1)
         # original_s = torch.from_numpy(original_s)
         self.update_vae(original_s)
+
+    def update(self):
+        if self.num_training % 16 == 0:
+            print("Training ... {} ".format(self.num_training))
+        # original_s = torch.tensor([t.original_s for t in self.replay_buffer]).float().to(device)
+        s = torch.tensor([t.s.cpu().numpy() for t in self.replay_buffer]).float().to(device)
+        a = torch.tensor([t.a for t in self.replay_buffer]).to(device)
+        r = torch.tensor([t.r for t in self.replay_buffer]).to(device)
+        s_ = torch.tensor([t.s_.cpu().numpy() for t in self.replay_buffer]).float().to(device)
+        d = torch.tensor([t.d for t in self.replay_buffer]).float().to(device)
+        # original_s = original_s.permute(2, 3, 0, 1)
+        # original_s = original_s.view(64, 64, -1)
+        # original_s = original_s.permute(2, 0, 1)
+        # original_s = torch.unsqueeze(original_s, 1)
+        # # original_s = torch.from_numpy(original_s)
+        # self.update_vae(original_s)
         for _ in range(args.gradient_steps):
             # for index in BatchSampler(SubsetRandomSampler(range(args.capacity)), args.batch_size, False):
             index = np.random.choice(range(args.capacity), args.batch_size, replace=False)

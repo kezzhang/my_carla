@@ -44,8 +44,9 @@ class FilterObservationWrapper():
                 break
         gray_camera = self.rgb2gray(observation['camera'])
         gray_lidar = self.rgb2gray(observation['lidar'])
+        gray_birdeye = self.rgb2gray(observation['birdeye'])
         self.stack.pop(0)
-        self.stack.append(gray_camera+gray_lidar)
+        self.stack.append(gray_birdeye)
 
         return np.array(self.stack), total_reward, done, info
 
@@ -54,6 +55,7 @@ class FilterObservationWrapper():
         # print(observation['camera'].shape)
         gray_camera = self.rgb2gray(observation['camera'])
         gray_lidar = self.rgb2gray(observation['lidar'])
+        gray_birdeye = self.rgb2gray(observation['birdeye'])
         # tmp = self.modify_observation(observation)
-        self.stack = [gray_camera+gray_lidar] * self.img_stack
+        self.stack = [gray_birdeye] * self.img_stack
         return np.array(self.stack)
