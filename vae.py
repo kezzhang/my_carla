@@ -103,6 +103,14 @@ class VanillaVAE(nn.Module):
         #result = result.view(4, 1, 64, 64)
         return result
 
+    def decode_single_input(self, z):
+        result = self.decoder_input(z)
+        result = result.view(4, 64, 2, 2)
+        result = self.decoder(result)
+        result = self.final_layer(result)
+        # result = result.view(4, 1, 64, 64)
+        return result
+
     def reparameterize(self, mu, logvar):
         """
         Reparameterization trick to sample from N(mu, var) from
